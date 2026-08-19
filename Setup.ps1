@@ -25,13 +25,23 @@
 
 .PARAMETER Force
     Re-ask for the token even if one is already stored.
+
+.PARAMETER Gpu
+    Install the CUDA libraries without prompting. Only useful on a machine with
+    an NVIDIA GPU and a working driver.
+
+.PARAMETER NoGpu
+    Skip the CUDA question entirely and stay on CPU.
 #>
 
 [CmdletBinding()]
 param(
     [switch]$TokenOnly,
     [switch]$SkipModels,
-    [switch]$Force
+    [switch]$Force,
+    # Skip the "do you have an NVIDIA GPU?" prompt and force the answer.
+    [switch]$Gpu,
+    [switch]$NoGpu
 )
 
 # Native stderr must never abort the script; exit codes are checked instead.
@@ -366,6 +376,183 @@ if (-not (Have "python")) {
     }
 }
 
+# ===================================================================== gpu ===
+function Get-NvidiaGpu {
+    <# Returns the GPU name if an NVIDIA card is present, else $null. #>
+    if (Have "nvidia-smi") {
+        $r = Invoke-Native "nvidia-smi" @("--query-gpu=name","--format=csv,noheader")
+        if ($r.Code -eq 0 -and $r.Text.Trim()) {
+            return ($r.Text.Trim() -split "`r?`n")[0]
+        }
+    }
+    # nvidia-smi missing does not prove there is no card -- the driver may not
+    # be installed yet. Fall back to the device list.
+    try {
+        $vc = Get-CimInstance Win32_VideoController -ErrorAction Stop |
+              Where-Object { $_.Name -match 'NVIDIA|GeForce|RTX|GTX|Quadro|Tesla' }
+        if ($vc) { return ($vc | Select-Object -First 1).Name }
+    } catch { }
+    return $null
+}
+
+function Get-Ct2Version {
+    if (-not (Have "python")) { return $null }
+    $r = Invoke-Native "python" @("-c","import ctranslate2,sys;sys.stdout.write(ctranslate2.__version__)")
+    if ($r.Code -eq 0 -and $r.Text.Trim() -match '^\d+\.\d+') { return $r.Text.Trim() }
+    return $null
+}
+
+function Setup-Gpu {
+    Step "GPU (CUDA) support"
+
+    $gpuName = Get-NvidiaGpu
+    if ($gpuName) { Ok "NVIDIA device detected: $gpuName" }
+    else { Warn "no NVIDIA device detected on this machine" }
+
+    if ($NoGpu) { Warn "-NoGpu set -- skipping"; return $false }
+
+    $want = $false
+    if ($Gpu) {
+        $want = $true
+        Ok "-Gpu set -- installing CUDA libraries"
+    } else {
+        Add-Type -AssemblyName System.Windows.Forms | Out-Null
+        $msg = if ($gpuName) {
+@"
+Detected: $gpuName
+
+Install CUDA acceleration for transcription?
+
+This downloads roughly 1-2 GB:
+  - nvidia-cublas-cu12, nvidia-cudnn-cu12  (CTranslate2 needs these)
+  - the CUDA build of PyTorch, replacing the CPU-only one
+
+It does NOT install the NVIDIA driver. If transcription still shows
+CPU only afterwards, install the latest driver from nvidia.com and
+run Setup.ps1 again.
+
+Choose No to stay on CPU. Everything works on CPU, just slower.
+"@
+        } else {
+@"
+No NVIDIA GPU was detected on this machine.
+
+Do you have an NVIDIA card (RTX / GTX / Quadro / Tesla) that this
+check may have missed - for example because the driver is not
+installed yet?
+
+Choose Yes only if you are sure. It downloads roughly 1-2 GB and is
+useless without NVIDIA hardware.
+
+AMD and Intel GPUs, and Ryzen AI NPUs, cannot be used: CTranslate2
+implements CPU and CUDA backends only.
+"@
+        }
+        $icon = if ($gpuName) { [Windows.Forms.MessageBoxIcon]::Question }
+                else { [Windows.Forms.MessageBoxIcon]::Warning }
+        $default = if ($gpuName) { [Windows.Forms.MessageBoxDefaultButton]::Button1 }
+                   else { [Windows.Forms.MessageBoxDefaultButton]::Button2 }
+        $ans = [Windows.Forms.MessageBox]::Show(
+            $msg, "CUDA GPU support",
+            [Windows.Forms.MessageBoxButtons]::YesNo, $icon, $default)
+        $want = ($ans -eq [Windows.Forms.DialogResult]::Yes)
+    }
+
+    if (-not $want) { Say "  staying on CPU" "DarkGray"; return $false }
+
+    # CTranslate2 >= 4.5 needs cuDNN 9 + CUDA >= 12.3; 4.0-4.4 needs cuDNN 8.
+    $ct2 = Get-Ct2Version
+    $cudnn = "nvidia-cudnn-cu12==9.*"
+    if ($ct2) {
+        Ok "ctranslate2 $ct2"
+        $parts = $ct2.Split('.')
+        $maj = [int]$parts[0]; $min = [int]$parts[1]
+        if ($maj -lt 4) {
+            Warn "ctranslate2 $ct2 expects CUDA 11 + cuDNN 8; installing the cu11 stack"
+            $cudnn = "nvidia-cudnn-cu11==8.*"
+        } elseif ($maj -eq 4 -and $min -lt 5) {
+            Warn "ctranslate2 $ct2 expects cuDNN 8"
+            $cudnn = "nvidia-cudnn-cu12==8.*"
+        }
+    } else {
+        Warn "could not read the ctranslate2 version; assuming cuDNN 9"
+    }
+
+    $cublas = if ($cudnn -like "*cu11*") { "nvidia-cublas-cu11" } else { "nvidia-cublas-cu12" }
+
+    Say "installing $cublas and $cudnn ..." "DarkGray"
+    $r = Invoke-Native "python" @("-m","pip","install","--upgrade",$cublas,$cudnn) -Stream
+    if ($r.Code -ne 0) { Bad "CUDA library install failed (exit $($r.Code))"; return $false }
+    Ok "CUDA libraries installed"
+
+    # The CPU-only torch installed earlier cannot use the GPU. The default
+    # PyPI wheel on Windows is the CUDA build, so drop the CPU index.
+    Say "replacing CPU-only torch with the CUDA build (large download)..." "DarkGray"
+    $r = Invoke-Native "python" @("-m","pip","install","--upgrade",
+                                  "--force-reinstall","torch") -Stream
+    if ($r.Code -ne 0) { Warn "torch reinstall returned $($r.Code); CTranslate2 may still work" }
+
+    # pip drops the DLLs under site-packages\nvidia\*\bin, which is not on the
+    # loader path. Without this, CTranslate2 reports zero CUDA devices.
+    $r = Invoke-Native "python" @("-c","import site,sys;sys.stdout.write(site.getsitepackages()[-1])")
+    $sp = $r.Text.Trim()
+    if ($sp -and (Test-Path $sp)) {
+        $dirs = @(Get-ChildItem -Path (Join-Path $sp "nvidia") -Recurse -Directory `
+                    -Filter "bin" -ErrorAction SilentlyContinue |
+                  Select-Object -ExpandProperty FullName)
+        if ($dirs) {
+            $userPath = [Environment]::GetEnvironmentVariable('Path','User')
+            $addedAny = $false
+            foreach ($d in $dirs) {
+                if ($userPath -notlike "*$d*") {
+                    $userPath = "$userPath;$d"
+                    $addedAny = $true
+                    Ok "PATH += $d"
+                }
+            }
+            if ($addedAny) {
+                [Environment]::SetEnvironmentVariable('Path', $userPath, 'User')
+                Warn "PATH updated -- reopen your terminal and the app"
+            } else { Ok "CUDA DLL directories already on PATH" }
+            $env:Path = "$env:Path;" + ($dirs -join ';')
+        } else { Warn "no nvidia\*\bin directories found under $sp" }
+    }
+
+    Step "GPU verification"
+    $chk = @"
+import sys
+try:
+    import ctranslate2 as c
+    n = c.get_cuda_device_count()
+    print('ctranslate2 sees', n, 'CUDA device(s)')
+except Exception as e:
+    print('ctranslate2 CUDA check failed:', repr(e)); n = 0
+try:
+    import torch
+    print('torch CUDA available:', torch.cuda.is_available())
+    if torch.cuda.is_available():
+        print('torch device:', torch.cuda.get_device_name(0))
+except Exception as e:
+    print('torch check failed:', repr(e))
+sys.exit(0 if n > 0 else 3)
+"@
+    $tmp = Join-Path $env:TEMP "verify_cuda.py"
+    Set-Content -LiteralPath $tmp -Value $chk -Encoding ASCII
+    $r = Invoke-Native "python" @($tmp) -Stream
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    if ($r.Code -eq 0) {
+        Ok "CUDA is usable -- pick it in the Engine dropdown (press Re-detect if already open)"
+        return $true
+    }
+    Warn "CUDA libraries are installed but no device is visible yet."
+    Warn "Most likely the NVIDIA driver is missing or out of date:"
+    Warn "  https://www.nvidia.com/Download/index.aspx"
+    Warn "Reopen the terminal after installing it and re-run: .\Setup.ps1 -Gpu"
+    return $false
+}
+
+$gpuOk = Setup-Gpu
+
 # =================================================================== token ===
 $tokenOk = Setup-Token
 
@@ -464,6 +651,7 @@ Step "Summary"
 Say "  Python          : $(if (Have 'python') {'yes'} else {'NO'})"
 Say "  ffmpeg          : $(if (Have 'ffmpeg') {'yes'} else {'no (optional)'})"
 Say "  HF_TOKEN        : $(if ($tokenOk) {'valid'} elseif ($env:HF_TOKEN) {'set but unverified'} else {'not set'})"
+Say "  CUDA GPU        : $(if ($gpuOk) {'ready'} else {'not enabled (CPU only)'})"
 Say "  Developer Mode  : $(if ($devOn) {'enabled'} else {'off'})"
 Say "  Symlinks now    : $(if ($symlinkOk) {'yes'} else {'no'})"
 Say ""

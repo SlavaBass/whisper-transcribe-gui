@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DirectML, Vulkan or NPU backend — so on machines without an NVIDIA GPU the
   list correctly contains a single CPU entry. AMD ROCm builds of CTranslate2
   report themselves as `cuda`.
+- **Optional CUDA setup in `Setup.ps1`.** Detects an NVIDIA GPU via `nvidia-smi`
+  with a `Win32_VideoController` fallback (so a card with no driver yet is still
+  found), then asks whether to install GPU support. Installs `nvidia-cublas-*`
+  and a `nvidia-cudnn-*` version matched to the installed `ctranslate2`, replaces
+  CPU-only PyTorch with the CUDA build, adds the `site-packages\nvidia\*\bin`
+  directories to PATH, and verifies with `ctranslate2.get_cuda_device_count()`.
+  New `-Gpu` and `-NoGpu` switches skip the prompt. The NVIDIA driver itself
+  cannot be installed this way; Setup says so and links to the download.
+
+  **Untested.** Developed without access to NVIDIA hardware. Reports from anyone
+  with a CUDA GPU are welcome.
 
 ## [1.0.0] - 2026-08-19
 

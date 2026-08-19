@@ -84,7 +84,13 @@ Useful flags:
 .\Setup.ps1 -TokenOnly     # just re-run the token dialog
 .\Setup.ps1 -SkipModels    # install software, skip the ~1.6 GB download
 .\Setup.ps1 -Force         # re-ask for a token even if one is stored
+.\Setup.ps1 -Gpu           # install CUDA support without prompting
+.\Setup.ps1 -NoGpu         # skip the CUDA question entirely
 ```
+
+Setup asks whether you have an NVIDIA GPU. It checks `nvidia-smi` and the device
+list first, so the prompt is pre-answered sensibly; answering yes installs the
+CUDA libraries (see [GPU acceleration](#gpu-acceleration)).
 
 ### Manual installation
 
@@ -169,6 +175,40 @@ you can sanity-check the result.
 
 Expect diarization error around 11–19% on clean audio and worse with crosstalk.
 Overlapping speech is where it fails hardest, and multi-party calls have plenty.
+
+## GPU acceleration
+
+**Optional, NVIDIA only.** Everything works on CPU; a GPU is a speed
+optimisation, not a requirement.
+
+Setup asks whether you have an NVIDIA card. Answering yes installs:
+
+- `nvidia-cublas-cu12` and `nvidia-cudnn-cu12` — CTranslate2 cannot use CUDA
+  without them
+- the CUDA build of PyTorch, replacing the CPU-only one (used by diarization)
+
+and adds the `site-packages\nvidia\*\bin` directories to your PATH, without
+which the DLLs are installed but not loadable. Roughly 1–2 GB in total.
+
+**It cannot install the NVIDIA driver.** Get that from
+[nvidia.com](https://www.nvidia.com/Download/index.aspx). If Setup reports
+"CUDA libraries are installed but no device is visible", a missing or outdated
+driver is the usual reason — install it, reopen the terminal, and run
+`.\Setup.ps1 -Gpu`.
+
+Library versions are matched to your installed `ctranslate2`:
+
+| ctranslate2 | Needs |
+|---|---|
+| ≥ 4.5 | CUDA ≥ 12.3 + cuDNN 9 |
+| 4.0 – 4.4 | CUDA 12 + cuDNN 8 |
+| < 4.0 | CUDA 11 + cuDNN 8 |
+
+Afterwards, restart the app (or press **Re-detect**) and your GPU appears in the
+Engine dropdown.
+
+**AMD and Intel GPUs and Ryzen AI NPUs cannot be used.** CTranslate2 implements
+CPU and CUDA backends only.
 
 ## Engine selection
 

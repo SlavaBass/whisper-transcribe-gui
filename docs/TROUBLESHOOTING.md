@@ -189,6 +189,50 @@ Always quote paths. Unquoted, PowerShell splits
 
 ---
 
+## GPU is installed but the Engine dropdown shows only CPU
+
+Work through these in order:
+
+1. **Is there a driver?** Run `nvidia-smi`. "not recognized" means no driver, and
+   no amount of pip installing will help. Get it from
+   [nvidia.com](https://www.nvidia.com/Download/index.aspx).
+2. **Are the libraries present?** `pip show nvidia-cudnn-cu12 nvidia-cublas-cu12`.
+   If missing, run `.\Setup.ps1 -Gpu`.
+3. **Are the DLLs on PATH?** pip installs them to
+   `site-packages\nvidia\<lib>\bin`, which is not on the loader path. Setup adds
+   these to your user PATH, but only new processes see the change — reopen the
+   terminal and the app.
+4. **Version mismatch.** `ctranslate2` ≥ 4.5 requires CUDA ≥ 12.3 with cuDNN 9.
+   Pairing it with cuDNN 8 produces DLL load failures rather than a clear error.
+   Downgrade `ctranslate2` to 4.4.0 for cuDNN 8 on CUDA 12, or 3.24.0 for
+   CUDA 11.
+5. **Press Re-detect.** The device list is cached; the app only re-probes
+   automatically when the environment fingerprint changes.
+
+Diagnose directly with:
+
+```powershell
+python -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"
+python -c "import torch; print(torch.cuda.is_available())"
+```
+
+If CTranslate2 reports 0 while torch reports `True`, the cuDNN/cuBLAS DLLs are
+the problem, not the driver.
+
+---
+
+## My GPU is AMD or Intel, or my CPU has an NPU
+
+It cannot be used. CTranslate2 implements **CPU and CUDA backends only** — no
+ROCm on Windows, no DirectML, no Vulkan, no Metal, no XDNA/NPU. An AMD Ryzen AI
+NPU is reachable only through a completely different runtime (ONNX Runtime with
+the Vitis AI provider), which faster-whisper does not use.
+
+CPU is the correct and only option on such machines. `large-v3-turbo` keeps that
+practical: roughly 70 minutes for an hour of audio on 8 physical cores.
+
+---
+
 ## Still stuck
 
 Open an issue and attach the newest file from `logs\`. It records versions,
