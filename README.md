@@ -17,7 +17,7 @@ The GUI is plain `tkinter` — no Qt, no GTK, no Electron, no extra runtime.
 
 ## Why this exists
 
-Whisper is excellent and free, but getting speaker-labelled Russian output on a
+Whisper is excellent and free, but getting speaker-labelled different languages output on a
 CPU-only Windows laptop involves a chain of undocumented failures: a PyTorch 2.6
 unpickling change that breaks pyannote checkpoints, a Windows symlink privilege
 that silently kills model downloads, a batching flag that quietly destroys
