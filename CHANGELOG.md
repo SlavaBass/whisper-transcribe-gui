@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Setup now requires elevation and enforces it.** If not run as administrator
+  it offers to relaunch itself elevated (forwarding any switches) rather than
+  failing later during the model download. Documentation now states elevation as
+  a requirement rather than a recommendation.
+- **Developer Mode demoted from "the fix" to "a bonus".** It is supposed to grant
+  `SeCreateSymbolicLinkPrivilege` to standard accounts, but it applies only to a
+  new logon token and, on at least one Windows 11 machine with it confirmed
+  enabled, symlink creation still failed for a standard account while elevation
+  succeeded. Group policy on managed machines is a plausible cause. Setup still
+  enables it, and now says plainly that elevation is the reliable path.
+
 ### Added
 
 - **Engine selector** — a session-wide dropdown listing only the compute devices

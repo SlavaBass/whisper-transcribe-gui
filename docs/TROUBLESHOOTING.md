@@ -14,12 +14,23 @@ rather than bugs in Whisper.
 symlinks it into a snapshot folder. Creating a symlink on Windows requires
 `SeCreateSymbolicLinkPrivilege`, which standard user accounts do not hold.
 
-**Fix:** Settings → System → For developers → **Developer Mode: On**.
+**Fix that works: run from an elevated PowerShell.** Right-click PowerShell →
+Run as administrator, then re-run `.\Setup.ps1`. Administrators hold the
+privilege in their token, so the download succeeds immediately.
 
-**The part that catches everyone:** privileges are written into your access token
-**at logon**. Opening a new PowerShell window inherits the same token and changes
-nothing — you must **sign out and sign back in** (or reboot). Until then, run
-from an elevated shell.
+**Developer Mode is the documented fix, and it is unreliable.** Settings →
+System → For developers → Developer Mode is *supposed* to grant the privilege to
+standard accounts. Two things get in the way:
+
+- Privileges are baked into your access token **at logon**, so opening a new
+  PowerShell window changes nothing. A full sign-out and sign-in, or a reboot,
+  is required.
+- Even after that, it may still not work. On at least one Windows 11 machine
+  with Developer Mode confirmed On, symlink creation continued to fail for a
+  standard account, and only elevation succeeded. Group policy on managed or
+  domain-joined machines is a plausible cause.
+
+Treat Developer Mode as a bonus, not the fix. **If in doubt, run elevated.**
 
 **There is no environment-variable workaround.** `HF_HUB_DISABLE_SYMLINKS_WARNING`
 only silences the warning; it does not change behaviour. There is no

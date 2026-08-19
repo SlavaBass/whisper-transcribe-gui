@@ -5,17 +5,26 @@
     pre-download.
 
 .DESCRIPTION
-    Run this ONCE, ideally from an elevated PowerShell:
+    Run this ONCE, from an ELEVATED PowerShell:
 
         Right-click PowerShell -> Run as administrator
-        cd D:\Calls
+        cd <this folder>
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
         .\Setup.ps1
 
-    Elevation is needed for two things only: enabling Developer Mode (so
-    HuggingFace can create cache symlinks) and downloading models before that
-    privilege is active in your logon token. Everyday use of Transcribe needs
-    no elevation at all.
+    Elevation is REQUIRED for the model download. HuggingFace creates symlinks
+    in its cache, which standard user accounts cannot do; without elevation the
+    download fails partway through with WinError 1314.
+
+    Developer Mode is supposed to grant that privilege to standard accounts, and
+    this script enables it, but it has proven unreliable: it applies only to a
+    new logon token, and on managed machines may not apply at all. Elevation is
+    the approach that works.
+
+    Running the app itself never needs elevation -- reading cached symlinks
+    requires no privilege.
+
+    If not elevated, this script offers to relaunch itself elevated.
 
 .PARAMETER TokenOnly
     Skip everything except the HuggingFace token dialog.
@@ -88,6 +97,48 @@ Say " Transcribe setup   $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" "White"
 Say " elevated: $IsAdmin" "DarkGray"
 Say " log: $LogFile" "DarkGray"
 Say "==================================================================" "DarkGray"
+
+# ------------------------------------------------------- elevation gate ---
+# Model downloads create symlinks in the HuggingFace cache, which standard
+# accounts cannot do. Developer Mode is meant to grant that privilege but has
+# proven unreliable in practice (it only applies to a new logon token, and on
+# managed machines may not apply at all). Elevation is the approach that works,
+# so make it hard to start without it by accident.
+if (-not $IsAdmin -and -not $TokenOnly) {
+    Say ""
+    Bad "This window is NOT running as administrator."
+    Warn "Model downloads will fail with WinError 1314 without elevation."
+    Warn "Developer Mode alone is not a reliable substitute."
+    Say ""
+    $answer = Read-Host "Relaunch elevated now? [Y] yes  [n] continue anyway  [q] quit"
+    if ($answer -match '^(q|quit)$') {
+        Say "aborted." "DarkGray"
+        try { Stop-Transcript | Out-Null } catch {}
+        exit 1
+    }
+    if ($answer -notmatch '^(n|no)$') {
+        $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass",
+                     "-File", "`"$PSCommandPath`"")
+        foreach ($kv in $PSBoundParameters.GetEnumerator()) {
+            if ($kv.Value -is [switch] -and $kv.Value.IsPresent) {
+                $argList += "-$($kv.Key)"
+            }
+        }
+        try {
+            Start-Process -FilePath "powershell.exe" -Verb RunAs `
+                          -ArgumentList $argList -WorkingDirectory $Root
+            Ok "elevated window launched -- continue there; closing this one."
+            try { Stop-Transcript | Out-Null } catch {}
+            exit 0
+        } catch {
+            Bad "could not elevate: $($_.Exception.Message)"
+            Warn "Right-click PowerShell -> Run as administrator, then re-run."
+            try { Stop-Transcript | Out-Null } catch {}
+            exit 1
+        }
+    }
+    Warn "continuing WITHOUT elevation -- expect model downloads to fail"
+}
 
 Refresh-Path
 
@@ -565,7 +616,11 @@ try {
                -ErrorAction Stop).AllowDevelopmentWithoutDevLicense -eq 1)
 } catch { $devOn = $false }
 
-if ($devOn) { Ok "Developer Mode is enabled in the registry" }
+if ($devOn) {
+    Ok "Developer Mode is enabled in the registry"
+    Warn "note: this alone has proven unreliable for symlinks -- the real"
+    Warn "guarantee is running this script elevated, which you are doing."
+}
 elseif ($IsAdmin) {
     try {
         if (-not (Test-Path $devKey)) { New-Item -Path $devKey -Force | Out-Null }

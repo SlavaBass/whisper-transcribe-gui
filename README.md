@@ -61,7 +61,13 @@ speaker attribution. This app encodes the fixes so you never meet them.
 
 ## Installation
 
-Clone or download the repository, then from an **elevated** PowerShell:
+Clone or download the repository.
+
+> ### Run Setup from an elevated PowerShell
+> **Right-click PowerShell → Run as administrator.** This is required, not
+> advisory. Model downloads create symlinks in the HuggingFace cache, which a
+> standard user account cannot do; without elevation the download fails partway
+> through with `WinError 1314`.
 
 ```powershell
 cd path\to\whisper-transcribe-gui
@@ -74,9 +80,16 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 in a dialog (with a *How do I get one?* guide and a live *Test token* button),
 enables Developer Mode, and pre-downloads the models.
 
-Elevation is needed **once**, for two reasons only: enabling Developer Mode, and
-downloading models before that privilege is active in your logon token. After a
-sign-out and sign-in, nothing ever needs admin again.
+Elevation is needed for **Setup only**, because of the model download. Running
+the app afterwards never needs admin: reading cached symlinks requires no
+privilege.
+
+Setup also enables Windows Developer Mode, which is *supposed* to grant the same
+symlink privilege to standard accounts. In practice this is unreliable — it
+applies only to a new logon token, and on managed or domain-joined machines it
+may not take effect at all. **Running Setup elevated is the approach that
+actually works.** If you later need a model you have not downloaded yet, re-run
+`.\Setup.ps1` elevated.
 
 Useful flags:
 
@@ -101,8 +114,15 @@ winget install Gyan.FFmpeg.Shared
 setx HF_TOKEN "hf_your_token_here"
 ```
 
-Then enable Developer Mode (Settings → System → For developers) and sign out and
-back in. See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for why.
+Run the model download from an **elevated** PowerShell, or it will fail with
+`WinError 1314`:
+
+```powershell
+python -c "from huggingface_hub import snapshot_download as d; d('mobiuslabsgmbh/faster-whisper-large-v3-turbo')"
+python -c "from huggingface_hub import snapshot_download as d; d('pyannote/speaker-diarization-community-1')"
+```
+
+See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for why.
 
 ---
 
@@ -194,7 +214,7 @@ which the DLLs are installed but not loadable. Roughly 1–2 GB in total.
 [nvidia.com](https://www.nvidia.com/Download/index.aspx). If Setup reports
 "CUDA libraries are installed but no device is visible", a missing or outdated
 driver is the usual reason — install it, reopen the terminal, and run
-`.\Setup.ps1 -Gpu`.
+`.\Setup.ps1 -Gpu` from an elevated PowerShell.
 
 Library versions are matched to your installed `ctranslate2`:
 
@@ -206,9 +226,6 @@ Library versions are matched to your installed `ctranslate2`:
 
 Afterwards, restart the app (or press **Re-detect**) and your GPU appears in the
 Engine dropdown.
-
-**AMD and Intel GPUs and Ryzen AI NPUs cannot be used.** CTranslate2 implements
-CPU and CUDA backends only.
 
 ## Engine selection
 
@@ -222,11 +239,9 @@ whatever CTranslate2 reports as supported for that device.
 Engine is a **session-wide** setting, not per file: an entire batch runs on one
 device. The dropdown is disabled while a batch is running.
 
-If you only see one CPU entry, that is correct and not a detection failure.
-CTranslate2, the runtime beneath faster-whisper, implements **CPU and CUDA
-backends only** — there is no Metal, DirectML, Vulkan or NPU path, and an
-AMD Ryzen AI NPU cannot be used at all. AMD ROCm builds of CTranslate2 present
-themselves as `cuda`.
+A single CPU entry is a normal result: the list reflects what CTranslate2
+reports on your machine. See
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) if you expected a GPU there.
 
 `--threads` affects CPU inference only and is ignored on CUDA.
 
@@ -257,7 +272,6 @@ reasoning and the other workarounds.
 
 - Windows only. The core is cross-platform but Setup, the launcher and the
   privilege handling are Windows-specific.
-- CPU only. No CUDA or ROCm path; `--device cuda` is untested here.
 - **Do not enable batched inference when you need speaker labels.** It merges
   output into ~30-second blocks and collapses attribution — on a 3-speaker test
   it reported 2 and produced repetition loops. The app leaves it off.
@@ -274,7 +288,7 @@ Quick hits:
 
 | Symptom | Cause |
 |---|---|
-| `WinError 1314` | Symlink privilege — enable Developer Mode, then **sign out and in** |
+| `WinError 1314` | Symlink privilege — **run Setup as administrator** (Developer Mode alone is unreliable) |
 | `UnpicklingError ... weights_only` | PyTorch ≥ 2.6 vs pyannote; the shim handles it |
 | `running scripts is disabled` | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` |
 | HTTP 403 from HuggingFace | Accept the gated model conditions with the token's own account |
