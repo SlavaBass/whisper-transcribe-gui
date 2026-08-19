@@ -1,0 +1,17 @@
+# Installed automatically by Setup.ps1. Listed here for reference and for
+# anyone who prefers to manage their own environment.
+#
+# Install CPU-only torch FIRST, otherwise pip pulls ~2.5 GB of CUDA libraries
+# that are useless without an NVIDIA GPU:
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt
+
+whisper-ctranslate2>=0.5.7
+pyannote.audio>=4.0
+huggingface_hub>=0.24
+torch>=2.6
+
+# Pulled in transitively, pinned here only for visibility:
+#   faster-whisper   (transcription engine wrapper)
+#   ctranslate2      (inference runtime)
