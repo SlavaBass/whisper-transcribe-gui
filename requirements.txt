@@ -12,6 +12,11 @@ pyannote.audio>=4.0
 huggingface_hub>=0.24
 torch>=2.6
 
+# Optional. Enables drag and drop from Explorer by wrapping the tkdnd Tcl
+# extension. The app runs without it; drag and drop is simply unavailable and
+# it says so at startup.
+tkinterdnd2>=0.4
+
 # Pulled in transitively, pinned here only for visibility:
 #   faster-whisper   (transcription engine wrapper)
 #   ctranslate2      (inference runtime)

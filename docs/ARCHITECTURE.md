@@ -145,6 +145,47 @@ backends only. There is no Metal, DirectML, Vulkan or XDNA/NPU support, and
 as `cuda`. A single CPU entry on a machine without an NVIDIA GPU is the correct
 result, not a detection bug.
 
+## Drag and drop
+
+tkinter has no native Explorer drop support, so this uses **`tkinterdnd2`**, a
+thin wrapper over the tkdnd Tcl extension. It is an *optional* dependency:
+
+- `make_root()` returns `TkinterDnD.Tk()` when the import succeeds, otherwise a
+  plain `tk.Tk()`, and reports which one via `root._dnd_ok`
+- `setup_drop()` calls `drop_target_register(DND_FILES)` and binds `<<Drop>>`
+- `_on_drop_event()` parses `event.data` with `tk.splitlist()`. tkdnd hands over
+  a **Tcl list**, so paths containing spaces arrive brace-quoted; splitting on
+  whitespace mangles them
+
+Absent the package the app logs that drag and drop is off and works normally.
+
+### Why not do it without a dependency
+
+The first implementation registered the toplevel with `DragAcceptFiles` and
+subclassed its window procedure through `ctypes` to intercept `WM_DROPFILES`.
+No dependency, and it **crashed the process on every drop**.
+
+The probable cause: `restype` was set on `SetWindowLongPtrW` and
+`CallWindowProcW` but `argtypes` was not, so ctypes defaulted those parameters
+to 32-bit ints and truncated the 64-bit procedure pointer. Windows then called a
+bad address.
+
+It was removed rather than fixed. The failure mode is a hard process crash with
+no traceback, it cannot be covered by tests in CI, and the benefit is one
+convenience feature. An optional, well-tested dependency is the better trade.
+
+## Editing queued items
+
+`editing_iid` holds the row under edit. `begin_edit()` copies the job's fields
+into the controls, locks the File entry and Browse button, relabels the action
+button, and tints the row. `apply_edit()` writes the values back and refreshes
+the grid; `cancel_edit()` restores the controls.
+
+The edit is abandoned automatically when the queue starts or the row is removed,
+because a job in flight must not have its settings mutated underneath it. Only
+`Queued` rows are editable; double-clicking a running row says so, and a
+finished row opens its output folder.
+
 ## Logging
 
 - `logs/session_<timestamp>.log` — one per app launch

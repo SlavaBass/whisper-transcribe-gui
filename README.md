@@ -27,8 +27,9 @@ speaker attribution. This app encodes the fixes so you never meet them.
 
 - **Speaker labels** — `[SPEAKER_00]`, `[SPEAKER_01]`, … with a fixed count or
   automatic detection
+- **Drag and drop** — drop files or folders straight onto the window
 - **Batch queue** — add files with per-file settings, start a bulk run, add more
-  while it is running
+  while it is running; double-click a queued row to change its settings
 - **Skip or reprocess** existing transcripts, with a policy you choose
 - **Real progress bar with ETA**, derived from segment timestamps rather than a
   spinner that tells you nothing
@@ -136,9 +137,26 @@ Double-click **`Transcribe.bat`**.
 2. Pick the language, model and speaker count
 3. Press **Transcribe**
 
+### Drag and drop
+
+Requires the optional `tkinterdnd2` package, which `Setup.ps1` installs. Without
+it everything else works and the app says drag and drop is off at startup:
+
+```powershell
+pip install tkinterdnd2
+```
+
+Drop files or folders anywhere on the window.
+
+- **One file** → its path goes into the File field, so you can set the options
+  before queueing it.
+- **Several files, or a folder** → queued immediately with the settings
+  currently selected. Non-media files are ignored and folders are scanned one
+  level deep.
+
 ### A batch
 
-1. **Browse…**, set the options for that file, press **Add to queue**
+1. **Browse…** or drop a file, set the options, press **Add to queue**
 2. Repeat — each file keeps the settings that were active when it was added
 3. Or **Add folder…** to queue every recording in a directory
 4. Press **Transcribe queue (N)**
@@ -146,6 +164,15 @@ Double-click **`Transcribe.bat`**.
 Files can be added while a batch is running; the worker picks them up. Jobs run
 strictly one at a time, because Whisper already uses every core — running two at
 once finishes the batch later, not sooner.
+
+### Editing a queued file
+
+**Double-click a queued row** to load its settings back into the controls. The
+button changes to **Update queue item**; press it to apply, or **Esc** to
+cancel. The File field is locked during an edit — the source file cannot be
+changed, only the settings.
+
+Double-clicking a **finished** row opens its output folder instead.
 
 ### Output
 

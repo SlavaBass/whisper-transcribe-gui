@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Drag and drop from Explorer.** A single file lands in the File field so its
+  settings can be set before queueing; multiple files, or a folder, are queued
+  immediately with the current settings. Folders are scanned one level deep and
+  non-media files are ignored.
+
+  Implemented with the optional `tkinterdnd2` package, installed by `Setup.ps1`.
+  Without it the app behaves exactly as before and reports that drag and drop is
+  unavailable.
+
+  An earlier dependency-free attempt subclassed the Win32 window procedure via
+  `ctypes` to intercept `WM_DROPFILES`. It crashed the process on every drop —
+  most likely 64-bit pointer truncation from missing `argtypes` on
+  `SetWindowLongPtrW` and `CallWindowProcW` — and has been removed rather than
+  patched. A convenience feature is not worth hand-written pointer handling that
+  can hard-crash.
+- **Editing queued items.** Double-clicking a queued row loads its settings into
+  the controls, highlights the row, and turns *Add to queue* into *Update queue
+  item*. Escape cancels. The source file is locked during an edit, so a row
+  cannot be silently repointed at a different recording. Edits are abandoned
+  automatically if the queue starts or the row is removed. Double-clicking a
+  finished row still opens its output folder.
+
 ### Changed
 
 - **Setup now requires elevation and enforces it.** If not run as administrator

@@ -38,6 +38,12 @@ Running with `python.exe` gives you a console mirroring the log.
 
 - Standard library only for the GUI. **Do not add a GUI framework.** Zero-install
   is the point of the project.
+- One documented exception: `tkinterdnd2`, an **optional** dependency for drag
+  and drop. The app must keep working when it is absent. Optional extras are
+  acceptable on those terms; required ones are not. The first attempt at drag
+  and drop avoided the dependency by subclassing the Win32 window procedure with
+  `ctypes` — it hard-crashed the process on every drop. Hand-written pointer
+  handling is not a reasonable price for a convenience feature.
 - Target Python 3.9 syntax; users get whatever winget installed.
 - PEP 8, 4 spaces, ~88 column soft limit.
 - Type hints where they clarify; not mandatory.

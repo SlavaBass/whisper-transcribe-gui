@@ -269,6 +269,38 @@ def engine_options(info):
     return opts
 
 
+# --------------------------------------------------------------------------- #
+# Drag and drop from Explorer
+#
+# tkinter has no native drop support. This used to be done by subclassing the
+# window procedure with ctypes to intercept WM_DROPFILES -- no dependency, but
+# it crashed the process on every drop, and hand-written pointer handling that
+# can hard-crash is not worth a convenience feature.
+#
+# tkinterdnd2 wraps the mature tkdnd Tcl extension and does the job properly.
+# It is an OPTIONAL dependency: without it the app runs exactly as before,
+# minus drag and drop, and says so at startup.
+# --------------------------------------------------------------------------- #
+
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    DND_AVAILABLE = True
+except Exception:                                   # not installed, or broken
+    DND_FILES = None
+    TkinterDnD = None
+    DND_AVAILABLE = False
+
+
+def make_root():
+    """A DnD-capable Tk root when possible, otherwise a plain one."""
+    if DND_AVAILABLE:
+        try:
+            return TkinterDnD.Tk(), True
+        except Exception:
+            pass                                    # tkdnd libs missing/broken
+    return tk.Tk(), False
+
+
 def physical_cores() -> int:
     """Physical cores; CTranslate2 loses throughput on hyperthreads."""
     try:
@@ -362,6 +394,7 @@ class App:
         self.engine_info = {}      # raw detector output, cached
         self.engine_fp = ""        # fingerprint the cache belongs to
         self.detect_done = False   # has the background probe finished?
+        self.editing_iid = None    # queue row whose settings are being edited
         # Safe default: CPU always exists, so a job can start before detection
         # completes, and a failed probe changes nothing.
         self.engine_spec = {"device": "cpu", "index": 0, "compute_type": "int8"}
@@ -375,6 +408,8 @@ class App:
         self.open_session_log()
         self.preflight()
         self.init_engines(cfg)
+
+        self.setup_drop(root)
 
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         root.after(120, self.drain)
@@ -394,8 +429,10 @@ class App:
 
         ttk.Label(top, text="File").grid(row=0, column=0, sticky="w", **pad)
         self.file_var = tk.StringVar()
-        ttk.Entry(top, textvariable=self.file_var).grid(row=0, column=1, sticky="ew", **pad)
-        ttk.Button(top, text="Browse...", command=self.pick_file).grid(row=0, column=2, **pad)
+        self.file_entry = ttk.Entry(top, textvariable=self.file_var)
+        self.file_entry.grid(row=0, column=1, sticky="ew", **pad)
+        self.browse_btn = ttk.Button(top, text="Browse...", command=self.pick_file)
+        self.browse_btn.grid(row=0, column=2, **pad)
 
         row = ttk.Frame(top)
         row.grid(row=1, column=0, columnspan=3, sticky="ew", padx=6, pady=(6, 2))
@@ -456,9 +493,11 @@ class App:
         self.run_btn = ttk.Button(btns, text="Transcribe", command=self.transcribe_now)
         self.run_btn.pack(side="left", padx=(0, 6))
         # No dialog here -- the file comes from the Browse field above, with
-        # whatever settings are currently selected.
-        ttk.Button(btns, text="Add to queue",
-                   command=self.add_current).pack(side="left", padx=3)
+        # whatever settings are currently selected. Doubles as "Update queue
+        # item" when a queued row is being edited.
+        self.add_btn = ttk.Button(btns, text="Add to queue",
+                                  command=self.add_current)
+        self.add_btn.pack(side="left", padx=3)
         ttk.Button(btns, text="Add folder...",
                    command=self.add_folder).pack(side="left", padx=3)
         self.stop_btn = ttk.Button(btns, text="Stop", command=self.stop_now, state="disabled")
@@ -467,6 +506,8 @@ class App:
                    command=self.remove_selected).pack(side="left", padx=(16, 3))
         ttk.Button(btns, text="Clear finished",
                    command=self.clear_finished).pack(side="left", padx=3)
+        self.edit_note = ttk.Label(btns, text="", foreground="#0b57d0")
+        self.edit_note.pack(side="left", padx=10)
 
         # ---- queue grid
         qf = ttk.LabelFrame(outer, text="Queue", padding=6)
@@ -495,7 +536,8 @@ class App:
         self.tree.tag_configure(ST_SKIP, foreground="#8a6d00")
         self.tree.tag_configure(ST_CANCEL, foreground="#777777")
         self.tree.tag_configure(ST_RUN, foreground="#0b57d0")
-        self.tree.bind("<Double-1>", self.open_row_output)
+        self.tree.tag_configure("editing", background="#e8f0fe")
+        self.tree.bind("<Double-1>", self.on_row_double_click)
 
         # ---- progress + status
         self.bar = ttk.Progressbar(outer, mode="determinate", maximum=1000)
@@ -520,10 +562,12 @@ class App:
         bottom.grid(row=6, column=0, sticky="ew", pady=(6, 0))
         ttk.Button(bottom, text="Open logs folder",
                    command=lambda: os.startfile(str(LOGDIR))).pack(side="left")
-        ttk.Label(bottom, text="   double-click a finished row to open its output",
-                  foreground="#777").pack(side="left")
+        ttk.Label(bottom, foreground="#777", text=(
+            "   drop files anywhere on this window  ·  double-click a queued row "
+            "to edit it, a finished row to open its output")).pack(side="left")
 
         self.sync_enabled()
+        root.bind("<Escape>", lambda _e: self.cancel_edit())
 
     def _validate_spk(self, proposed: str) -> bool:
         return proposed == "" or (proposed.isdigit() and len(proposed) <= 2)
@@ -930,14 +974,156 @@ class App:
         return src
 
     def add_current(self):
-        """Queue the file in the Browse field with the current settings.
-        Deliberately opens no dialog -- Browse... is for choosing files."""
+        """Queue the file in the Browse field with the current settings, or
+        apply the settings to the row being edited."""
+        if self.editing_iid:
+            self.apply_edit()
+            return
         src = self.current_file()
         if not src:
             return
         if self.enqueue([src]):
             self.say(f"[queue] added {src.name}; adjust settings and add more, "
-                     f"or press 'Start queue'")
+                     f"or press Transcribe")
+
+    # ------------------------------------------------------------ drag/drop
+    def setup_drop(self, root):
+        if not getattr(root, "_dnd_ok", False):
+            self.say("[info] drag and drop is off (tkinterdnd2 not installed). "
+                     "Enable it with:  pip install tkinterdnd2   "
+                     "or re-run Setup.ps1. Browse... works regardless.")
+            return
+        try:
+            root.drop_target_register(DND_FILES)
+            root.dnd_bind("<<Drop>>", self._on_drop_event)
+            self.say("[info] drag and drop enabled -- drop files or folders "
+                     "onto this window")
+        except Exception as e:
+            self.say(f"[warn] could not register drop target: {e!r}")
+
+    def _on_drop_event(self, event):
+        """tkdnd hands over a Tcl list; paths with spaces arrive brace-quoted,
+        so let Tcl split it rather than parsing by hand."""
+        try:
+            raw = self.root.tk.splitlist(event.data)
+        except Exception:
+            raw = [p for p in str(event.data).split() if p]
+        self.on_drop([str(p) for p in raw])
+
+    def on_drop(self, paths):
+        """Explorer drop. One file -> the Browse field. Several -> straight
+        into the queue with the current settings."""
+        media = []
+        for p in paths:
+            q = Path(p)
+            if q.is_dir():
+                found = sorted(x for x in q.iterdir()
+                               if x.is_file() and x.suffix.lower() in MEDIA_EXT)
+                self.say(f"[drop] folder {q.name}: {len(found)} media file(s)")
+                media.extend(found)
+            elif q.suffix.lower() in MEDIA_EXT:
+                media.append(q)
+            else:
+                self.say(f"[drop] ignoring non-media file: {q.name}")
+
+        if not media:
+            self.say("[drop] nothing usable dropped")
+            return
+
+        if len(media) == 1:
+            src = media[0]
+            if self.editing_iid:
+                # File is locked while editing; do not silently repoint the row.
+                self.say(f"[drop] editing a queued item -- file stays "
+                         f"{Path(self.file_var.get()).name}. "
+                         f"Press Escape to cancel the edit first.")
+                return
+            self.file_var.set(str(src))
+            self.say(f"[drop] {src.name} -> File field. Adjust settings, then "
+                     f"'Add to queue' or 'Transcribe'.")
+            return
+
+        if self.editing_iid:
+            self.cancel_edit(quiet=True)
+        self.say(f"[drop] {len(media)} files -- adding to the queue with the "
+                 f"current settings")
+        n = self.enqueue(media)
+        self.say(f"[drop] queued {n} file(s)")
+
+    # ----------------------------------------------------------- edit mode
+    def begin_edit(self, iid):
+        """Load a queued row's settings back into the controls."""
+        j = self.jobs.get(iid)
+        if not j or j.status != ST_QUEUED:
+            return
+        self.editing_iid = iid
+        self.file_var.set(str(j.src))
+        self.lang_var.set(j.lang_label)
+        self.model_var.set(j.model_label)
+        self.diar_var.set(j.diarize)
+        self.spk_var.set(j.spk)
+        self.thr_var.set(j.threads)
+        self.sync_enabled()
+
+        # Source file is fixed while editing -- changing it would create a
+        # duplicate or silently repoint the job.
+        self.file_entry.configure(state="readonly")
+        self.browse_btn.configure(state="disabled")
+        self.add_btn.configure(text="Update queue item")
+        self.edit_note.configure(
+            text=f"editing: {j.src.name}   (Esc to cancel)")
+        self.tree.item(iid, tags=("editing",))
+        self.say(f"[edit] {j.src.name} -- change the settings above and press "
+                 f"'Update queue item'")
+
+    def cancel_edit(self, quiet=False):
+        if not self.editing_iid:
+            return
+        iid = self.editing_iid
+        self.editing_iid = None
+        self.file_entry.configure(state="normal")
+        self.browse_btn.configure(state="normal")
+        self.add_btn.configure(text="Add to queue")
+        self.edit_note.configure(text="")
+        if self.tree.exists(iid):
+            j = self.jobs.get(iid)
+            self.tree.item(iid, tags=((j.status,) if j else (ST_QUEUED,)))
+        if not quiet:
+            self.say("[edit] cancelled")
+
+    def apply_edit(self):
+        iid = self.editing_iid
+        j = self.jobs.get(iid) if iid else None
+        if not j:
+            self.cancel_edit(quiet=True)
+            return
+        if j.status != ST_QUEUED:
+            self.say(f"[edit] {j.src.name} is no longer queued ({j.status}) -- "
+                     f"changes discarded")
+            self.cancel_edit(quiet=True)
+            return
+
+        before = (j.lang_label, j.model_label, j.spk, j.diarize, j.threads)
+        j.lang_label = self.lang_var.get()
+        j.lang = dict(LANGUAGES)[j.lang_label]
+        j.model_label = self.model_var.get()
+        j.model = dict(MODELS)[j.model_label]
+        j.diarize = bool(self.diar_var.get())
+        j.spk = self.spk_var.get().strip()
+        j.threads = int(self.thr_var.get())
+        after = (j.lang_label, j.model_label, j.spk, j.diarize, j.threads)
+
+        spk_txt = j.spk if (j.diarize and j.spk) else ("auto" if j.diarize else "-")
+        vals = list(self.tree.item(iid, "values"))
+        vals[1], vals[2], vals[3] = j.lang_label, j.model, spk_txt
+        self.tree.item(iid, values=vals)
+
+        if before == after:
+            self.say(f"[edit] {j.src.name} -- nothing changed")
+        else:
+            self.say(f"[edit] {j.src.name} updated: {j.lang_label}, {j.model}, "
+                     f"speakers={spk_txt}, threads={j.threads}")
+        self.cancel_edit(quiet=True)
 
     def add_folder(self):
         d = filedialog.askdirectory(title="Add every recording in a folder",
@@ -978,6 +1164,8 @@ class App:
         self.start_queue()
 
     def remove_selected(self):
+        if self.editing_iid in self.tree.selection():
+            self.cancel_edit(quiet=True)
         for iid in self.tree.selection():
             with self.lock:
                 j = self.jobs.get(iid)
@@ -1004,18 +1192,32 @@ class App:
                 self.tree.delete(iid)
         self.update_counts()
 
-    def open_row_output(self, _event=None):
-        sel = self.tree.selection()
-        if not sel:
+    def on_row_double_click(self, event=None):
+        """Queued row  -> load its settings for editing.
+        Finished row -> open its output folder."""
+        iid = self.tree.identify_row(event.y) if event else None
+        if not iid:
+            sel = self.tree.selection()
+            iid = sel[0] if sel else None
+        if not iid:
             return
-        j = self.jobs.get(sel[0])
+        j = self.jobs.get(iid)
         if not j:
             return
+
+        if j.status == ST_QUEUED:
+            self.begin_edit(iid)
+            return
+        if j.status == ST_RUN:
+            self.say(f"[edit] {j.src.name} is already running -- "
+                     f"press Stop first to change it")
+            return
+
         d = output_dir_for(j.src)
         if d.is_dir():
             os.startfile(str(d))
         else:
-            self.say(f"[info] no output folder yet for {j.src.name}")
+            self.say(f"[info] no output folder for {j.src.name}")
 
     def update_counts(self):
         with self.lock:
@@ -1051,6 +1253,11 @@ class App:
         if self.next_queued() is None:
             self.say("[queue] nothing to do.")
             return
+        # A row could start running mid-edit; drop the edit rather than let it
+        # apply to a job already in flight.
+        if self.editing_iid:
+            self.say("[edit] queue starting -- edit cancelled")
+            self.cancel_edit(quiet=True)
         self.save_settings()
         self.stop_queue = False
         self.worker = threading.Thread(target=self.worker_loop, daemon=True)
@@ -1430,7 +1637,8 @@ class App:
 
 
 def main():
-    root = tk.Tk()
+    root, dnd_ok = make_root()
+    root._dnd_ok = dnd_ok
     try:
         root.call("tk", "scaling", 1.3)
     except Exception:

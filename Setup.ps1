@@ -417,10 +417,17 @@ if (-not (Have "python")) {
         if ($r.Code -eq 0) { Ok $pkg } else { Bad "$pkg failed (exit $($r.Code))" }
     }
 
+    # Optional: drag and drop. The app runs fine without it, so a failure here
+    # must not fail setup.
+    Say "installing tkinterdnd2 (optional -- drag and drop) ..." "DarkGray"
+    $r = Invoke-Native "python" @("-m","pip","install","--upgrade","tkinterdnd2") -Stream
+    if ($r.Code -eq 0) { Ok "tkinterdnd2 (drag and drop enabled)" }
+    else { Warn "tkinterdnd2 failed (exit $($r.Code)) -- the app works, without drag and drop" }
+
     Step "Installed versions"
     $lst = (Invoke-Native "python" @("-m","pip","list","--format=freeze")).Text
     foreach ($p in @("torch","whisper-ctranslate2","faster-whisper","ctranslate2",
-                     "pyannote.audio","huggingface-hub")) {
+                     "pyannote.audio","huggingface-hub","tkinterdnd2")) {
         $rx = [regex]::Escape($p).Replace('\.','[._-]')
         $m = [regex]::Match($lst, "(?im)^$rx==(\S+)")
         if ($m.Success) { Ok "$p $($m.Groups[1].Value)" } else { Warn "$p missing" }
