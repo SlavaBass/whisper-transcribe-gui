@@ -5,8 +5,6 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
 ### Added
 
 - **Drag and drop from Explorer.** A single file lands in the File field so its
@@ -124,5 +122,4 @@ First public release.
 - Output is written only when a file finishes; cancelling produces nothing
 - Windows only
 
-[Unreleased]: https://github.com/OWNER/whisper-transcribe-gui/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/SlavaBass/whisper-transcribe-gui/releases/tag/v1.0.0
